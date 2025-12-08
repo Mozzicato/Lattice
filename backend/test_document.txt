@@ -1,0 +1,26 @@
+# Physics: Newton's Second Law
+
+Newton's Second Law states that the force acting on an object is equal to the mass of the object multiplied by its acceleration.
+
+The fundamental equation is:
+
+$$F = ma$$
+
+where:
+- F is the force in Newtons
+- m is the mass in kilograms
+- a is the acceleration in meters per second squared
+
+## Kinetic Energy
+
+The kinetic energy of an object in motion is given by:
+
+$$E_k = \frac{1}{2}mv^2$$
+
+where v is the velocity in meters per second.
+
+## Work-Energy Theorem
+
+The work done on an object equals the change in kinetic energy:
+
+$$W = \Delta E_k = E_{k,f} - E_{k,i}$$
