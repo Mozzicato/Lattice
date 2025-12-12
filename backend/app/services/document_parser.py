@@ -23,6 +23,7 @@ class PageContent:
         self.text = ""
         self.images: List[Dict[str, Any]] = []
         self.tables: List[Any] = []
+        self.snapshot_path: str | None = None
 
 
 class DocumentParser:
@@ -75,13 +76,14 @@ class DocumentParser:
             logger.error(f"Error getting page count: {e}")
             return 0
     
-    def extract_all_pages(self, file_path: str, document_id: str) -> List[PageContent]:
+    def extract_all_pages(self, file_path: str, document_id: str, save_snapshots: bool = True) -> List[PageContent]:
         """
         Extract ALL content from ALL pages including images
         
         Args:
             file_path: Path to the file
             document_id: Document ID for saving images
+            save_snapshots: Whether to store full-page snapshots for OCR/preview
             
         Returns:
             List of PageContent objects for each page
@@ -89,22 +91,28 @@ class DocumentParser:
         path = Path(file_path)
         
         if path.suffix.lower() == '.pdf':
-            return self._extract_all_pdf_pages(file_path, document_id)
+            return self._extract_all_pdf_pages(file_path, document_id, save_snapshots)
         elif path.suffix.lower() == '.txt':
             # Text files have one "page"
             content = PageContent(1)
             content.text = self._extract_from_text(file_path)
             return [content]
+        elif path.suffix.lower() in {'.png', '.jpg', '.jpeg', '.tiff'}:
+            return self._extract_from_image(file_path, document_id, save_snapshots)
         else:
             raise ValueError(f"Unsupported file type: {path.suffix}")
     
-    def _extract_all_pdf_pages(self, file_path: str, document_id: str) -> List[PageContent]:
+    def _extract_all_pdf_pages(self, file_path: str, document_id: str, save_snapshots: bool = True) -> List[PageContent]:
         """Extract ALL content from ALL PDF pages"""
         pages_content: List[PageContent] = []
         
         # Create images directory
-        images_dir = Path(settings.UPLOAD_DIR) / document_id / "images"
+        base_dir = Path(settings.UPLOAD_DIR) / document_id
+        images_dir = base_dir / "images"
+        pages_dir = base_dir / "pages"
         images_dir.mkdir(parents=True, exist_ok=True)
+        if save_snapshots:
+            pages_dir.mkdir(parents=True, exist_ok=True)
         
         try:
             with pdfplumber.open(file_path) as pdf:
@@ -115,6 +123,10 @@ class DocumentParser:
                     logger.info(f"Processing page {page_num}/{total_pages}")
                     
                     page_content = PageContent(page_num)
+                    
+                    # Save full-page snapshot for OCR/preview
+                    if save_snapshots:
+                        page_content.snapshot_path = self._save_page_snapshot(page, page_num, pages_dir)
                     
                     # Extract text
                     text = page.extract_text()
@@ -162,6 +174,40 @@ class DocumentParser:
             raise
         
         return pages_content
+
+    def _extract_from_image(self, file_path: str, document_id: str, save_snapshots: bool = True) -> List[PageContent]:
+        """Treat a single image as a one-page document"""
+        pages_dir = Path(settings.UPLOAD_DIR) / document_id / "pages"
+        pages_dir.mkdir(parents=True, exist_ok=True)
+
+        page_content = PageContent(1)
+        if save_snapshots:
+            target_path = pages_dir / f"page_0001{Path(file_path).suffix.lower()}"
+            try:
+                # Copy image so downstream services have a stable path
+                Image.open(file_path).save(target_path)
+                page_content.snapshot_path = str(target_path)
+            except Exception as e:
+                logger.warning(f"Failed to persist image snapshot: {e}")
+                page_content.snapshot_path = file_path
+        else:
+            page_content.snapshot_path = file_path
+
+        return [page_content]
+
+    def _save_page_snapshot(self, page, page_num: int, pages_dir: Path) -> str | None:
+        """Persist a full-page snapshot for OCR and traceability"""
+        try:
+            page_image = page.to_image(resolution=200)
+            snapshot_path = pages_dir / f"page_{page_num:04d}.png"
+            if hasattr(page_image, 'original'):
+                page_image.original.save(str(snapshot_path), 'PNG')
+            else:
+                page_image.save(str(snapshot_path))
+            return str(snapshot_path)
+        except Exception as e:
+            logger.warning(f"Could not save page snapshot {page_num}: {e}")
+            return None
     
     def _extract_image(
         self, 

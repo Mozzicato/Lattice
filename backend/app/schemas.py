@@ -193,6 +193,66 @@ class ExportRequest(BaseModel):
     format: str = Field(..., pattern="^(markdown|json|pdf)$")
 
 
+# Note Beautification Schemas
+class PageSnapshot(BaseModel):
+    """Represents a page snapshot for beautification"""
+    page_number: int
+    snapshot_path: str
+    original_text: str
+    original_character_count: int
+
+
+class OcrSegmentWithLowConfidence(BaseModel):
+    """OCR segment where confidence was below threshold"""
+    text: str
+    confidence: float
+    bbox: Dict[str, Any]
+
+
+class PageOcrMetadata(BaseModel):
+    """OCR metadata for a single page"""
+    page_number: int
+    average_confidence: float
+    low_confidence_segments: List[OcrSegmentWithLowConfidence]
+    provider: str
+
+
+class NoteBeautificationRequest(BaseModel):
+    """Request to beautify and refine notes"""
+    document_id: str
+    focus_areas: Optional[List[str]] = None
+    include_image_references: bool = True
+    target_language_level: str = "undergraduate"  # "high_school", "undergraduate", "graduate"
+
+
+class PageBeautificationResult(BaseModel):
+    """Beautified content for a single page"""
+    page_number: int
+    original_text_length: int
+    beautified_text: str
+    beautified_text_length: int
+    estimated_confidence: float
+    formula_count: int
+    low_confidence_warnings: List[str]
+
+
+class NoteBeautificationResponse(BaseModel):
+    """Complete beautification result"""
+    document_id: str
+    original_filename: str
+    beautification_status: str
+    total_pages: int
+    pages_processed: int
+    pages_with_warnings: int
+    beautified_pages: List[PageBeautificationResult]
+    document_title: str
+    introduction: str
+    conclusion: str
+    low_confidence_summary: Optional[str] = None
+    download_url: str
+    created_at: datetime
+
+
 # Upload Response
 class UploadResponse(BaseModel):
     """Schema for upload response"""

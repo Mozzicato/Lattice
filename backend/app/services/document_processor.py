@@ -10,6 +10,8 @@ from app.services.document_parser import DocumentParser, PageContent
 from app.services.equation_extractor import EquationExtractor, ExtractedEquation
 from app.services.equation_analyzer import EquationAnalyzer
 from app.services.llm_client import LLMClient
+from app.services.ocr_engine import OcrEngine
+from app.config import settings
 from app.models import Document, Equation, EquationAnalysis
 
 logger = logging.getLogger(__name__)
@@ -30,6 +32,7 @@ class DocumentProcessor:
         self.parser = DocumentParser()
         self.equation_extractor = EquationExtractor()
         self.equation_analyzer = EquationAnalyzer(llm_client=llm_client)
+        self.ocr_engine = OcrEngine(low_confidence_threshold=settings.OCR_LOW_CONFIDENCE)
         self.llm_client = llm_client
     
     def process_document(
@@ -61,6 +64,9 @@ class DocumentProcessor:
             "images_extracted": 0,
             "concepts_extracted": 0,
             "sections_identified": 0,
+            "ocr_pages": 0,
+            "ocr_low_confidence_pages": 0,
+            "ocr_low_confidence_segments": 0,
             "errors": []
         }
         
@@ -72,21 +78,39 @@ class DocumentProcessor:
             
             # Step 2: Extract ALL pages with images
             logger.info("Step 2: Extracting ALL pages with images...")
-            all_pages = self.parser.extract_all_pages(file_path, document.id)
+            all_pages = self.parser.extract_all_pages(file_path, document.id, save_snapshots=True)
             results["pages_processed"] = len(all_pages)
             
             # Collect all text and images
             all_text_parts = []
             all_images = []
-            page_texts = {}  # page_num -> text
+            page_texts: Dict[int, str] = {}  # page_num -> text
+            page_snapshots: List[Dict[str, Any]] = []
+            ocr_results: Dict[int, Any] = {}
             
             for page in all_pages:
-                # Add page marker
-                all_text_parts.append(f"\n\n=== PAGE {page.page_num} ===\n\n")
-                all_text_parts.append(page.text)
-                page_texts[page.page_num] = page.text
+                if page.snapshot_path:
+                    page_snapshots.append({"page": page.page_num, "path": page.snapshot_path})
                 
-                # Collect images
+                ocr_result = None
+                if page.snapshot_path:
+                    ocr_result = self.ocr_engine.extract_text(page.snapshot_path)
+                    if ocr_result:
+                        ocr_results[page.page_num] = ocr_result
+                        results["ocr_pages"] += 1
+                        if ocr_result.get("low_confidence_segments"):
+                            results["ocr_low_confidence_pages"] += 1
+                
+                text_choice = page.text or ""
+                if ocr_result and ocr_result.get("text"):
+                    ocr_text = ocr_result.get("text", "")
+                    if not text_choice or len(ocr_text) > len(text_choice):
+                        text_choice = ocr_text
+                
+                all_text_parts.append(f"\n\n=== PAGE {page.page_num} ===\n\n")
+                all_text_parts.append(text_choice)
+                page_texts[page.page_num] = text_choice
+                
                 for img in page.images:
                     all_images.append(img)
                     results["images_extracted"] += 1
@@ -96,6 +120,13 @@ class DocumentProcessor:
             
             logger.info(f"  Total text: {len(raw_text)} characters from {len(all_pages)} pages")
             logger.info(f"  Total images: {results['images_extracted']}")
+            logger.info(f"  OCR pages: {results['ocr_pages']} (low-confidence pages: {results['ocr_low_confidence_pages']})")
+            results["ocr_low_confidence_segments"] = sum(
+                len(v.get("low_confidence_segments", [])) for v in ocr_results.values()
+            )
+            results["ocr_low_confidence_segments"] = sum(
+                len(v.get("low_confidence_segments", [])) for v in ocr_results.values()
+            )
             
             # Step 3: Extract ALL equations with context
             logger.info("Step 3: Extracting all equations...")
@@ -184,6 +215,9 @@ class DocumentProcessor:
                 "sections": sections,
                 "images": all_images,  # Store all image info
                 "page_texts": page_texts,  # Store text per page
+                "page_snapshots": page_snapshots,  # Store snapshot paths per page
+                "ocr_results": ocr_results,  # Store OCR results per page
+                "ocr_low_confidence_segments": results["ocr_low_confidence_segments"],
                 "processing_complete": True
             }
             

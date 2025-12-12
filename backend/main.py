@@ -4,14 +4,16 @@ Lattice API - Main Application Entry Point
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from app.config import settings
-from app.api.v1 import documents, equations, simulations, questions, summaries, sessions, notes
+from app.api.v1 import documents, equations, simulations, questions, summaries, sessions, notes_beautify_visual
 
 # Configure logging
 logging.basicConfig(
@@ -110,7 +112,11 @@ app.include_router(simulations.router, prefix="/api/v1", tags=["simulations"])
 app.include_router(sessions.router, prefix="/api/v1", tags=["sessions"])
 app.include_router(questions.router, prefix="/api/v1", tags=["questions"])
 app.include_router(summaries.router, prefix="/api/v1", tags=["summaries"])
-app.include_router(notes.router, prefix="/api/v1", tags=["notes"])
+app.include_router(notes_beautify_visual.router, prefix="/api/v1", tags=["notes-beautify"])
+
+# Mount uploads directory for serving images
+if os.path.exists(settings.UPLOAD_DIR):
+    app.mount("/uploads", StaticFiles(directory=settings.UPLOAD_DIR), name="uploads")
 
 
 if __name__ == "__main__":

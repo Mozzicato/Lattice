@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     # LLM API Keys (Optional - basic analysis works without them)
     OPENAI_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
     
     # Database
     DATABASE_URL: str = "sqlite:///./lattice.db"
@@ -35,7 +36,10 @@ class Settings(BaseSettings):
     # File Upload
     MAX_FILE_SIZE_MB: int = 10
     UPLOAD_DIR: str = "./uploads"
-    ALLOWED_EXTENSIONS: List[str] = [".pdf", ".txt"]
+    ALLOWED_EXTENSIONS: List[str] = [".pdf", ".txt", ".png", ".jpg", ".jpeg", ".tiff"]
+
+    # OCR
+    OCR_LOW_CONFIDENCE: int = 75
     
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]

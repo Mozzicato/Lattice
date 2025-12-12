@@ -114,23 +114,77 @@ class ApiClient {
     return response.data;
   }
 
-  // Notes
-  async rewriteNotes(documentId: string): Promise<{
-    title: string;
-    formatted_content: string;
-    sections: Array<{ title: string; content: string[] }>;
-    page_count: number;
-    image_count: number;
+  // Notes - Beautification
+  async beautifyNotes(documentId: string, targetLanguageLevel: string = "undergraduate"): Promise<{
+    document_id: string;
+    original_filename: string;
+    beautification_status: string;
+    total_pages: number;
+    pages_processed: number;
+    pages_with_warnings: number;
+    beautified_pages: Array<{
+      page_number: number;
+      original_text_length: number;
+      beautified_text: string;
+      beautified_text_length: number;
+      estimated_confidence: number;
+      formula_count: number;
+      low_confidence_warnings: string[];
+    }>;
+    document_title: string;
+    introduction: string;
+    conclusion: string;
+    low_confidence_summary?: string;
     download_url: string;
   }> {
-    const response = await this.client.post('/notes/rewrite', {
+    const response = await this.client.post('/notes/beautify', {
       document_id: documentId,
+      target_language_level: targetLanguageLevel,
+      include_image_references: true
     });
     return response.data;
   }
 
-  async downloadNotes(documentId: string): Promise<Blob> {
-    const response = await this.client.get(`/notes/${documentId}/download`, {
+  async downloadBeautifiedNotes(documentId: string): Promise<Blob> {
+    const response = await this.client.get(`/notes/${documentId}/beautified/download`, {
+      responseType: 'blob',
+    });
+    return response.data;
+  }
+
+  // Visual Beautification - generates beautiful HTML/CSS output
+  async beautifyNotesVisual(documentId: string): Promise<{
+    document_id: string;
+    original_filename: string;
+    status: string;
+    total_pages: number;
+    pages_analyzed: number;
+    successful_analyses: number;
+    html_preview_url: string;
+    html_download_url: string;
+    created_at: string;
+    page_results: Array<{
+      page_number: number;
+      success: boolean;
+      error?: string;
+    }>;
+  }> {
+    const response = await this.client.post('/notes/beautify-visual', {
+      document_id: documentId
+    });
+    return response.data;
+  }
+
+  getVisualPreviewUrl(documentId: string): string {
+    return `${API_BASE_URL}/notes/${documentId}/beautified-visual/preview`;
+  }
+
+  getBaseUrl(): string {
+    return API_BASE_URL.startsWith('/') ? '' : API_BASE_URL;
+  }
+
+  async downloadVisualBeautifiedNotes(documentId: string): Promise<Blob> {
+    const response = await this.client.get(`/notes/${documentId}/beautified-visual/download`, {
       responseType: 'blob',
     });
     return response.data;

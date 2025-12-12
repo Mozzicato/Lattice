@@ -17,9 +17,16 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [showNotes, setShowNotes] = useState(false);
-  const [rewrittenNote, setRewrittenNote] = useState<string | null>(null);
-  const [noteInfo, setNoteInfo] = useState<{pageCount: number; imageCount: number} | null>(null);
-  const [isRewritingNote, setIsRewritingNote] = useState(false);
+  const [beautifiedContent, setBeautifiedContent] = useState<string | null>(null);
+  const [beautificationInfo, setBeautificationInfo] = useState<{
+    total_pages: number;
+    pages_processed: number;
+    pages_with_warnings: number;
+    current_page: number;
+  } | null>(null);
+  const [isBeautifying, setIsBeautifying] = useState(false);
+  const [beautifyProgress, setBeautifyProgress] = useState<string>('');
+  const [visualPreviewUrl, setVisualPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -134,33 +141,174 @@ Feel free to ask me anything about this document!`
   };
 
   const handleRewriteNotes = async () => {
-    if (!overview?.document.id || isRewritingNote) return;
+    if (!overview?.document.id || isBeautifying) return;
     
-    setIsRewritingNote(true);
+    setIsBeautifying(true);
+    setVisualPreviewUrl(null);
+    setBeautifiedContent(null);
+    setBeautifyProgress('Starting beautification...');
+    setBeautificationInfo(null);
+    setShowNotes(true); // Show notes viewer immediately
+    
     try {
-      const result = await api.rewriteNotes(overview.document.id);
-      setRewrittenNote(result.formatted_content);
-      setNoteInfo({
-        pageCount: result.page_count,
-        imageCount: result.image_count
-      });
-      setShowNotes(true);
+      // Use streaming for real-time progress
+      // EventSource doesn't use proxy, so we need to construct the full backend URL
+      const backendUrl = window.location.hostname === 'localhost' 
+        ? 'http://localhost:8000' 
+        : '';
+      const eventSource = new EventSource(
+        `${backendUrl}/api/v1/notes/${overview.document.id}/beautify-visual/stream`
+      );
+      
+      let totalPages = 0;
+      let successfulPages = 0;
+      let failedPages = 0;
+      let htmlParts: string[] = [];
+      let cssTemplate = '';
+
+      const updateLivePreview = () => {
+        // Close tags temporarily for rendering
+        const currentHtml = htmlParts.join('\n') + `
+            </main>
+            <script>
+                // Auto-scroll to bottom to show new content
+                window.scrollTo(0, document.body.scrollHeight);
+                
+                // Render math
+                if (window.renderMathInElement) {
+                    renderMathInElement(document.body, {
+                        delimiters: [
+                            {left: '$$', right: '$$', display: true},
+                            {left: '$', right: '$', display: false},
+                            {left: '\\\\[', right: '\\\\]', display: true},
+                            {left: '\\\\(', right: '\\\\)', display: false}
+                        ],
+                        throwOnError: false
+                    });
+                }
+            </script>
+        </body>
+        </html>`;
+        
+        const blob = new Blob([currentHtml], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        setVisualPreviewUrl(url);
+      };
+      
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          if (data.type === 'start') {
+            totalPages = data.total_pages;
+            cssTemplate = data.css || '';
+            
+            // Initialize HTML structure
+            htmlParts = [`<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Preview</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>${cssTemplate}</style>
+</head>
+<body>
+    <div class="document-container">
+        <header class="document-header">
+            <h1 class="document-title">📚 Live Preview</h1>
+            <p class="document-subtitle">Beautifying your notes in real-time...</p>
+            <div class="document-meta">Processing...</div>
+        </header>
+        <main>`];
+            
+            updateLivePreview();
+            
+            setBeautifyProgress(`Processing ${totalPages} pages...`);
+            setBeautificationInfo({
+              total_pages: totalPages,
+              pages_processed: 0,
+              pages_with_warnings: 0,
+              current_page: 0
+            });
+          } else if (data.type === 'progress') {
+            setBeautifyProgress(`Processing page ${data.page} of ${data.total}...`);
+            setBeautificationInfo(prev => prev ? {
+              ...prev,
+              current_page: data.page
+            } : null);
+          } else if (data.type === 'page_done') {
+            if (data.success) {
+              successfulPages++;
+              // Append page HTML
+              const pageHtml = `<section class="page-section" id="page-${data.page}">
+                <div class="page-header">
+                    <span class="page-number">${data.page}</span>
+                    <h2 class="page-title">Page ${data.page}</h2>
+                </div>
+                <div class="page-content">${data.html}</div>
+            </section>`;
+              htmlParts.push(pageHtml);
+              updateLivePreview();
+            } else {
+              failedPages++;
+            }
+            setBeautificationInfo(prev => prev ? {
+              ...prev,
+              pages_processed: successfulPages + failedPages,
+              pages_with_warnings: failedPages
+            } : null);
+            setBeautifyProgress(`Completed page ${data.page} of ${data.total}`);
+          } else if (data.type === 'complete') {
+            eventSource.close();
+            // Switch to the final server-generated URL which has the TOC and everything perfect
+            setVisualPreviewUrl(api.getVisualPreviewUrl(overview.document.id));
+            setBeautificationInfo({
+              total_pages: data.total_pages,
+              pages_processed: data.successful,
+              pages_with_warnings: data.total_pages - data.successful,
+              current_page: data.total_pages
+            });
+            setBeautifyProgress('');
+            setIsBeautifying(false);
+          } else if (data.type === 'error') {
+            eventSource.close();
+            setBeautifyProgress('');
+            setIsBeautifying(false);
+            alert('Beautification failed: ' + data.message);
+          }
+        } catch (e) {
+          console.error('Error parsing SSE event:', e);
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error('SSE error:', error);
+        eventSource.close();
+        setBeautifyProgress('');
+        setIsBeautifying(false);
+        alert('Connection lost during beautification. Please try again.');
+      };
     } catch (error: any) {
-      console.error('Note rewrite error:', error);
-      alert('Failed to rewrite notes: ' + (error.response?.data?.detail || error.message));
+      console.error('Note beautification error:', error);
+      alert('Failed to beautify notes: ' + (error.response?.data?.detail || error.message));
+      setIsBeautifying(false);
+      setBeautifyProgress('');
     }
-    setIsRewritingNote(false);
   };
 
   const handleDownloadNotes = async () => {
     if (!overview?.document.id) return;
     
     try {
-      const blob = await api.downloadNotes(overview.document.id);
+      const blob = await api.downloadVisualBeautifiedNotes(overview.document.id);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${overview.document.filename}_formatted.md`;
+      a.download = `${overview.document.filename}_beautified.html`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -260,43 +408,109 @@ Feel free to ask me anything about this document!`
               </ul>
 
               <div className="notes-section">
-                <h3 style={{ marginTop: '30px' }}>📝 Your Notes</h3>
+                <h3 style={{ marginTop: '30px' }}>📝 Note Beautification</h3>
+                
                 <button 
                   className="rewrite-btn"
                   onClick={handleRewriteNotes}
-                  disabled={isRewritingNote}
+                  disabled={isBeautifying}
+                  style={{ width: '100%', marginBottom: '8px' }}
                 >
-                  {isRewritingNote ? '✨ Rewriting...' : '✨ Beautify My Notes'}
+                  {isBeautifying ? '✨ Beautifying...' : '✨ Beautify My Notes'}
                 </button>
-                {rewrittenNote && (
+                
+                {beautifyProgress && (
+                  <p style={{ fontSize: '0.85rem', color: '#6366f1', margin: '8px 0' }}>
+                    {beautifyProgress}
+                  </p>
+                )}
+                
+                {beautificationInfo && isBeautifying && (
+                  <div style={{ 
+                    background: '#f3f4f6', 
+                    borderRadius: '8px', 
+                    padding: '8px', 
+                    marginBottom: '8px'
+                  }}>
+                    <div style={{ 
+                      height: '6px', 
+                      background: '#e5e7eb', 
+                      borderRadius: '3px',
+                      overflow: 'hidden'
+                    }}>
+                      <div style={{
+                        height: '100%',
+                        width: `${(beautificationInfo.pages_processed / beautificationInfo.total_pages) * 100}%`,
+                        background: 'linear-gradient(90deg, #6366f1, #8b5cf6)',
+                        transition: 'width 0.3s ease'
+                      }} />
+                    </div>
+                    <p style={{ fontSize: '0.75rem', margin: '4px 0 0', color: '#666' }}>
+                      {beautificationInfo.pages_processed}/{beautificationInfo.total_pages} pages
+                    </p>
+                  </div>
+                )}
+                
+                {visualPreviewUrl && (
                   <button 
                     className="download-btn"
                     onClick={handleDownloadNotes}
+                    style={{ width: '100%' }}
                   >
-                    ⬇️ Download
+                    ⬇️ Download HTML
                   </button>
                 )}
               </div>
             </aside>
 
-            {showNotes && rewrittenNote ? (
+            {showNotes && visualPreviewUrl ? (
               <div className="notes-viewer">
                 <div className="notes-header">
-                  <h2>📝 Formatted Notes</h2>
-                  {noteInfo && (
+                  <h2>📝 Beautified Notes</h2>
+                  {beautificationInfo && (
                     <span className="note-stats">
-                      {noteInfo.pageCount} pages • {noteInfo.imageCount} images
+                      {beautificationInfo.pages_processed}/{beautificationInfo.total_pages} pages • 
+                      {beautificationInfo.pages_with_warnings > 0 ? ` ⚠️ ${beautificationInfo.pages_with_warnings} with warnings` : ' ✓ All pages processed'}
                     </span>
                   )}
-                  <button 
-                    className="close-notes-btn"
-                    onClick={() => setShowNotes(false)}
-                  >
-                    ← Back to Chat
-                  </button>
+                  <div style={{ display: 'flex', gap: '10px' }}>
+                    <a 
+                      href={visualPreviewUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="open-new-tab-btn"
+                      style={{
+                        padding: '6px 12px',
+                        background: '#4f46e5',
+                        color: 'white',
+                        borderRadius: '6px',
+                        textDecoration: 'none',
+                        fontSize: '0.9rem'
+                      }}
+                    >
+                      Open in New Tab ↗
+                    </a>
+                    <button 
+                      className="close-notes-btn"
+                      onClick={() => setShowNotes(false)}
+                    >
+                      ← Back to Chat
+                    </button>
+                  </div>
                 </div>
-                <div className="notes-content">
-                  <MessageRenderer content={rewrittenNote} />
+                <div className="notes-content" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+                  <iframe 
+                    src={visualPreviewUrl}
+                    style={{
+                      width: '100%',
+                      flex: 1,
+                      border: 'none',
+                      borderRadius: '8px',
+                      background: 'white',
+                      minHeight: '600px'
+                    }}
+                    title="Beautified Notes Preview"
+                  />
                 </div>
               </div>
             ) : (
