@@ -1,0 +1,42 @@
+1. [ ] Initialize Project Structure
+   - [ ] Setup Backend (FastAPI, Python 3.11+)
+   - [ ] Setup Frontend (React, TypeScript, Vite/CRA)
+   - [ ] Configure Docker/Environment
+
+2. [ ] Backend Core
+   - [ ] Database Schema (Documents, Sessions, Chat History)
+   - [ ] API Endpoints: Document Upload & Processing
+   - [ ] API Endpoints: Chat/Session Management
+
+3. [ ] Feature: Socratic Tutor Mode
+   - [ ] LLM Prompt Engineering for Socratic Questioning
+   - [ ] Logic to analyze user answers & detect misconceptions
+   - [ ] State management for conversation flow
+
+4. [ ] Feature: "I'm Lost" Button
+   - [ ] API Endpoint for "Explain Differently"
+   - [ ] Logic to simplify/analogize content based on context
+
+5. [ ] Feature: Mental Model Builder
+   - [ ] Prompting for "Structure before Math" explanations
+   - [ ] Concept extraction & relationship mapping
+
+6. [ ] Feature: Note Beautification (Missing in original list)
+   - [ ] OCR Pipeline (Handwritten Text + Math/LaTeX extraction)
+   - [ ] Content Reconstruction (LLM rewriting, Grammar fix, LaTeX rendering)
+   - [ ] Frontend: Side-by-side view (Original vs Beautified)
+
+7. [ ] Feature: Voice Interaction (Missing in original list)
+   - [ ] Backend: Speech-to-Text (STT) for user input
+   - [ ] Backend: Text-to-Speech (TTS) for tutor output
+   - [ ] Frontend: Push-to-talk UI & Audio playback
+
+8. [ ] Frontend Implementation
+   - [ ] Chat Interface (Message bubbles, Input)
+   - [ ] "I'm Lost" Button Component
+   - [ ] Document/Context Viewer
+   - [ ] State management (Session, Messages)
+
+9. [ ] Integration & Testing
+   - [ ] Connect Frontend to Backend
+   - [ ] Test full flow (Upload -> Chat -> "I'm Lost")

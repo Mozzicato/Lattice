@@ -1,1 +1,0 @@
-"""Lattice Backend Application Package"""
