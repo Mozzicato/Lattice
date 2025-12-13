@@ -79,6 +79,7 @@ class ApiClient {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      timeout: 30000  // 30 second timeout for upload
     });
     return response.data;
   }
