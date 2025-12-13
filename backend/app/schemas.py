@@ -35,10 +35,19 @@ class Session(SessionBase):
 class DocumentBase(BaseModel):
     filename: str
 
+class Page(BaseModel):
+    id: int
+    page_number: int
+    beautified_text: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
 class Document(DocumentBase):
     id: int
     upload_date: datetime
     status: str
+    pages: List[Page] = []
 
     class Config:
         from_attributes = True

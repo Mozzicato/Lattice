@@ -1,38 +1,137 @@
-.App {
-  text-align: center;
+.app-container {
+  display: flex;
+  height: 100vh;
+  background-color: #f5f7fa;
+  font-family: 'Inter', sans-serif;
 }
 
-.App-logo {
-  height: 40vmin;
-  pointer-events: none;
+.sidebar {
+  width: 260px;
+  background-color: #ffffff;
+  border-right: 1px solid #e1e4e8;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .App-logo {
-    animation: App-logo-spin infinite 20s linear;
-  }
+.sidebar h1 {
+  color: #2c3e50;
+  margin-bottom: 30px;
 }
 
-.App-header {
-  background-color: #282c34;
-  min-height: 100vh;
+.upload-section, .tools-section {
+  margin-bottom: 30px;
+}
+
+.doc-info {
+  margin-top: 10px;
+  padding: 10px;
+  background: #f0f4f8;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.welcome-screen {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  font-size: calc(10px + 2vmin);
+  height: 100%;
+  color: #7f8c8d;
+}
+
+.messages-list {
+  flex: 1;
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.message {
+  max-width: 70%;
+  padding: 12px 16px;
+  border-radius: 12px;
+  line-height: 1.5;
+}
+
+.message.user {
+  align-self: flex-end;
+  background-color: #3498db;
+  color: white;
+  border-bottom-right-radius: 2px;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background-color: white;
+  border: 1px solid #e1e4e8;
+  border-bottom-left-radius: 2px;
+  color: #2c3e50;
+}
+
+.input-area {
+  padding: 20px;
+  background-color: white;
+  border-top: 1px solid #e1e4e8;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.message-form {
+  flex: 1;
+  display: flex;
+  gap: 10px;
+}
+
+input[type="text"] {
+  flex: 1;
+  padding: 12px;
+  border: 1px solid #e1e4e8;
+  border-radius: 6px;
+  font-size: 1rem;
+}
+
+button {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.2s;
+}
+
+button[type="submit"] {
+  background-color: #2c3e50;
   color: white;
 }
 
-.App-link {
-  color: #61dafb;
+.im-lost-btn {
+  background-color: #e74c3c;
+  color: white;
+  white-space: nowrap;
 }
 
-@keyframes App-logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+.im-lost-btn:hover {
+  background-color: #c0392b;
+}
+
+.tool-btn {
+  width: 100%;
+  margin-bottom: 10px;
+  background-color: #9b59b6;
+  color: white;
+}
+
+.tool-btn:hover {
+  background-color: #8e44ad;
 }

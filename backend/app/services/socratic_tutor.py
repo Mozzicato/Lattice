@@ -16,6 +16,19 @@ Guidelines:
 
 If the user says "I'm lost", switch to a simpler, more intuitive explanation style.
 """
+        self.simplification_prompt = """
+You are Lattice, in "I'm Lost" mode. The user is overwhelmed.
+Your goal is to explain the current concept using PURE INTUITION and ANALOGIES.
+
+Guidelines:
+1.  **NO MATH.** Do not use formulas or complex notation.
+2.  **Use Analogies.** Relate the concept to everyday physical objects (water, gravity, traffic, etc.).
+3.  **Step Back.** Go up one level of abstraction. Explain the "Big Idea".
+4.  **Be Calm.** Use reassuring language.
+5.  **Short & Clear.** Keep it brief.
+
+After explaining, ask a simple checking question to see if they are back on track.
+"""
 
     async def generate_response(self, history: List[Dict[str, str]], context: str = "") -> str:
         """
@@ -27,6 +40,22 @@ If the user says "I'm lost", switch to a simpler, more intuitive explanation sty
             messages.append({"role": "system", "content": f"Context from document:\n{context}"})
             
         messages.extend(history)
+        
+        response = await self.llm.get_completion(messages)
+        return response
+
+    async def generate_simplified_explanation(self, history: List[Dict[str, str]], context: str = "") -> str:
+        """
+        Generates a simplified explanation (I'm Lost mode).
+        """
+        messages = [{"role": "system", "content": self.simplification_prompt}]
+        
+        if context:
+            messages.append({"role": "system", "content": f"Context from document:\n{context}"})
+            
+        messages.extend(history)
+        # Add an explicit instruction to the end to trigger the simplification
+        messages.append({"role": "user", "content": "I'm lost. Please explain this differently, without the math."})
         
         response = await self.llm.get_completion(messages)
         return response
