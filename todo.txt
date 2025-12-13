@@ -1,17 +1,17 @@
-1. [ ] Initialize Project Structure
-   - [ ] Setup Backend (FastAPI, Python 3.11+)
-   - [ ] Setup Frontend (React, TypeScript, Vite/CRA)
-   - [ ] Configure Docker/Environment
+1. [x] Initialize Project Structure
+   - [x] Setup Backend (FastAPI, Python 3.11+)
+   - [x] Setup Frontend (React, TypeScript, Create-React-App)
+   - [x] Configure Docker/Environment
 
 2. [ ] Backend Core
-   - [ ] Database Schema (Documents, Sessions, Chat History)
-   - [ ] API Endpoints: Document Upload & Processing
-   - [ ] API Endpoints: Chat/Session Management
+   - [x] Database Schema (Documents, Sessions, Chat History)
+   - [x] API Endpoints: Document Upload & Processing
+   - [x] API Endpoints: Chat/Session Management
 
-3. [ ] Feature: Socratic Tutor Mode
-   - [ ] LLM Prompt Engineering for Socratic Questioning
-   - [ ] Logic to analyze user answers & detect misconceptions
-   - [ ] State management for conversation flow
+3. [x] Feature: Socratic Tutor Mode
+   - [x] LLM Prompt Engineering for Socratic Questioning
+   - [x] Logic to analyze user answers & detect misconceptions
+   - [x] State management for conversation flow
 
 4. [ ] Feature: "I'm Lost" Button
    - [ ] API Endpoint for "Explain Differently"
