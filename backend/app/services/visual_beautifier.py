@@ -1,8 +1,11 @@
 """
 Visual Note Beautification Service
-Uses LLM Vision to analyze page snapshots and generate beautiful HTML/CSS output
+OCR-based note beautification with proper formula formatting
 """
 import logging
+import os
+import re
+import html
 import time
 import asyncio
 from pathlib import Path
@@ -10,6 +13,8 @@ from typing import Dict, List, Any, Optional, AsyncGenerator
 from dataclasses import dataclass
 
 from app.config import settings
+from app.services.ocr_engine import OcrEngine
+from app.services.equation_extractor import EquationExtractor
 
 logger = logging.getLogger(__name__)
 
@@ -26,18 +31,9 @@ class PageAnalysis:
 
 class VisualBeautifier:
     """
-    Transforms notes into beautiful HTML documents using Vision AI.
+    Transforms notes into beautiful HTML documents using OCR and formula extraction.
+    MVP approach: No LLM quota limits!
     """
-    
-    # Rate limiting for Gemini free tier (1.5 Flash allows 15 RPM)
-    REQUESTS_PER_MINUTE = 15
-    MIN_DELAY_BETWEEN_REQUESTS = 4.0  # 4 seconds is safe for 15 RPM
-    MAX_RETRIES = 3
-    RETRY_DELAY = 10.0
-    
-    # Track quota exhaustion across requests
-    quota_exhausted = False
-    quota_exhausted_time = 0
     
     CSS_TEMPLATE = """
     :root {
@@ -185,210 +181,221 @@ class VisualBeautifier:
     """
     
     def __init__(self):
-        self.gemini_client = None
-        self.groq_client = None
-        self.last_request_time = 0
-        self._init_clients()
+        """Initialize OCR-based beautifier (no LLM required for MVP)"""
+        self.ocr_engine = OcrEngine(low_confidence_threshold=75)
+        self.equation_extractor = EquationExtractor()
+        logger.info("OCR-based Note Beautifier initialized (MVP mode - no quota limits!)")
     
-    def _init_clients(self):
-        # 1. Try Groq (First Choice)
+    async def _analyze_page_with_vision(
+        self,
+        snapshot_path: str,
+        page_number: int,
+        document_id: str,
+        document_metadata: Dict[str, Any],
+    ) -> PageAnalysis:
+        """Analyze a single page using OCR (no LLM required for MVP)."""
+
+        if not snapshot_path or not Path(snapshot_path).exists():
+            return PageAnalysis(
+                page_number=page_number,
+                snapshot_path="",
+                html_content=self._missing_page_block(page_number),
+                success=False,
+                error="Missing snapshot",
+            )
+
+        # Use OCR to extract text
+        text_info = self._extract_page_text(document_metadata, page_number, snapshot_path)
+        page_images = self._get_page_images(document_metadata, page_number, document_id)
+        
+        # Render clean HTML with proper formula formatting
+        html_content = self._render_page_content(
+            page_number=page_number,
+            document_id=document_id,
+            text_info=text_info,
+            images=page_images,
+            snapshot_path=snapshot_path,
+        )
+
+        return PageAnalysis(
+            page_number=page_number,
+            snapshot_path=snapshot_path,
+            html_content=html_content,
+            success=True,
+            error=None,
+        )
+
+    def _missing_page_block(self, page_number: int) -> str:
+        return (
+            f'<div class="callout warning"><div class="callout-icon">⚠️'
+            f'</div><div class="callout-content">Page {page_number} not found</div></div>'
+        )
+
+    def _extract_page_text(
+        self,
+        document_metadata: Dict[str, Any],
+        page_number: int,
+        snapshot_path: Optional[str],
+    ) -> Dict[str, Any]:
+        """Pick the richest text for a page using stored metadata and OCR."""
+        page_texts = document_metadata.get("page_texts") or {}
+        chosen_text = page_texts.get(page_number, "") or ""
+
+        ocr_result = None
+        if snapshot_path and self.ocr_engine.available():
+            ocr_result = self.ocr_engine.extract_text(snapshot_path)
+
+        if ocr_result:
+            ocr_text = (ocr_result.get("text") or "").strip()
+            if len(ocr_text) > len(chosen_text):
+                chosen_text = ocr_text
+
+        provider = (ocr_result or {}).get("provider") or ("metadata" if chosen_text else "unavailable")
+        avg_conf = (ocr_result or {}).get("average_confidence")
+        low_conf = (ocr_result or {}).get("low_confidence_segments") or []
+
+        return {
+            "text": chosen_text.strip(),
+            "provider": provider,
+            "average_confidence": avg_conf,
+            "low_confidence_segments": low_conf,
+        }
+
+    def _get_page_images(self, document_metadata: Dict[str, Any], page_number: int, document_id: str) -> List[Dict[str, Any]]:
+        images = []
+        for img in document_metadata.get("images", []) or []:
+            page_val = img.get("page") or img.get("page_num") or img.get("page_number")
+            if page_val == page_number:
+                images.append(self._normalize_image_info(img, document_id, page_number))
+        return images
+
+    def _normalize_image_info(self, img: Dict[str, Any], document_id: str, page_number: int) -> Dict[str, Any]:
+        path = img.get("path") or ""
+        url = self._to_public_url(path, document_id)
+        caption = img.get("filename") or img.get("caption") or f"Page {page_number} image"
+        return {"url": url or path, "caption": caption}
+
+    def _render_page_content(
+        self,
+        page_number: int,
+        document_id: str,
+        text_info: Dict[str, Any],
+        images: List[Dict[str, Any]],
+        snapshot_path: Optional[str],
+    ) -> str:
+        snapshot_url = self._to_public_url(snapshot_path, document_id) if snapshot_path else None
+        text_html = self._render_text_block(text_info.get("text", ""))
+        image_html = self._render_images(images)
+
+        meta_bits = []
+        if text_info.get("provider"):
+            meta_bits.append(f"Text source: {text_info['provider']}")
+        if text_info.get("average_confidence") is not None:
+            meta_bits.append(f"Avg OCR confidence: {text_info['average_confidence']}")
+        meta_line = " • ".join(meta_bits)
+
+        snapshot_block = (
+            f'<div class="page-snapshot"><img src="{snapshot_url}" alt="Page {page_number} snapshot"></div>'
+            if snapshot_url
+            else ""
+        )
+
+        return (
+            f'<div class="callout tip"><div class="callout-icon">🧠'
+            f'</div><div class="callout-content"><div class="callout-title">Page insights'
+            f'</div><p>{meta_line or "OCR disabled or unavailable; showing page assets."}</p>'
+            f"</div></div>{text_html}{image_html}{snapshot_block}"
+        )
+
+    def _render_images(self, images: List[Dict[str, Any]]) -> str:
+        if not images:
+            return ""
+        cards = []
+        for img in images:
+            url = img.get("url")
+            caption = html.escape(img.get("caption") or "Figure")
+            if not url:
+                continue
+            cards.append(
+                f'<div class="image-card"><img src="{url}" alt="{caption}">'  # noqa: E501
+                f'<div class="figure-caption">{caption}</div></div>'
+            )
+        return f"<div class=\"image-grid\">{''.join(cards)}</div>"
+
+    def _render_text_block(self, text: str) -> str:
+        if not text or not text.strip():
+            return '<p class="text-secondary">No text extracted for this page.</p>'
+
+        blocks = [blk.strip() for blk in text.split("\n\n") if blk.strip()]
+        rendered: List[str] = []
+        for blk in blocks:
+            if self._is_list_block(blk):
+                rendered.append(self._format_list_block(blk))
+            else:
+                eqs = self.equation_extractor.extract_equations(blk)
+                processed = self._inject_equations(blk, eqs)
+                rendered.append(f"<p>{processed.replace('\n', '<br>')}</p>")
+
+        return "\n".join(rendered)
+
+    def _is_list_block(self, block: str) -> bool:
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        if not lines:
+            return False
+        return all(self._is_list_line(line) for line in lines)
+
+    def _is_list_line(self, line: str) -> bool:
+        return bool(re.match(r"^([-*•·]|\d+[\.)])\s+", line))
+
+    def _format_list_block(self, block: str) -> str:
+        lines = [ln.strip() for ln in block.splitlines() if ln.strip()]
+        items = []
+        for line in lines:
+            clean = re.sub(r"^([-*•·]|\d+[\.|\)])\s+", "", line).strip()
+            eqs = self.equation_extractor.extract_equations(clean)
+            items.append(f"<li>{self._inject_equations(clean, eqs)}</li>")
+        return f"<ul>{''.join(items)}</ul>"
+
+    def _inject_equations(self, text: str, equations: List[Any]) -> str:
+        if not equations:
+            return html.escape(text)
+
+        output: List[str] = []
+        cursor = 0
+        for eq in equations:
+            raw = eq.raw_match
+            start = text.find(raw, cursor)
+            if start == -1:
+                continue
+            output.append(html.escape(text[cursor:start]))
+            latex = eq.latex
+            raw_trim = raw.strip()
+            is_block = raw_trim.startswith("$$") or raw_trim.startswith("\\[") or raw_trim.startswith("\\begin")
+            if is_block:
+                output.append(f'<div class="equation-block">\\[{latex}\\]</div>')
+            else:
+                output.append(f'<span class="inline-math">\\({latex}\\)</span>')
+            cursor = start + len(raw)
+
+        output.append(html.escape(text[cursor:]))
+        return "".join(output)
+
+    def _to_public_url(self, path: str, document_id: str) -> Optional[str]:
+        if not path:
+            return None
         try:
-            import os
-            from groq import Groq
-            groq_api_key = os.getenv("GROQ_API_KEY")
-            if groq_api_key:
-                self.groq_client = Groq(api_key=groq_api_key)
-                logger.info("Groq Vision client initialized (Llama 3.2 Vision)")
-            else:
-                logger.warning("No GROQ_API_KEY found")
-        except Exception as e:
-            logger.warning(f"Failed to initialize Groq: {e}")
+            uploads_root = str(Path(settings.UPLOAD_DIR).resolve())
+            resolved = str(Path(path).resolve())
+            if resolved.startswith(uploads_root):
+                rel = Path(resolved).relative_to(uploads_root)
+                return f"/uploads/{rel.as_posix()}"
+        except Exception:
+            pass
 
-        # 2. Initialize Gemini (Fallback)
-        try:
-            import google.generativeai as genai
-            api_key = settings.GEMINI_API_KEY
-            if api_key:
-                genai.configure(api_key=api_key)
-                # User requested gemini-2.5-flash-lite as fallback
-                self.gemini_client = genai.GenerativeModel('gemini-2.5-flash-lite')
-                logger.info("Gemini Vision client initialized (gemini-2.5-flash-lite)")
-            else:
-                logger.warning("No Gemini API key - using fallback mode")
-        except Exception as e:
-            logger.error(f"Failed to initialize Gemini: {e}")
-            # Fallback to 1.5 Flash if 2.5 fails
-            try:
-                import google.generativeai as genai
-                self.gemini_client = genai.GenerativeModel('gemini-1.5-flash')
-                logger.info("Fallback: Gemini Vision client initialized (gemini-1.5-flash)")
-            except:
-                pass
-    
-    async def _wait_for_rate_limit(self):
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.MIN_DELAY_BETWEEN_REQUESTS:
-            wait_time = self.MIN_DELAY_BETWEEN_REQUESTS - elapsed
-            logger.info(f"Rate limit: waiting {wait_time:.1f}s")
-            await asyncio.sleep(wait_time)
-        self.last_request_time = time.time()
-    
-    async def _analyze_page_with_vision(self, snapshot_path: str, page_number: int, document_id: str) -> PageAnalysis:
-        # Check if quota was recently exhausted - skip API calls entirely
-        if VisualBeautifier.quota_exhausted:
-            time_since_exhaustion = time.time() - VisualBeautifier.quota_exhausted_time
-            if time_since_exhaustion < 60:  # Wait at least 60 seconds before retrying
-                logger.info(f"Page {page_number}: Skipping API call (quota exhausted {time_since_exhaustion:.0f}s ago)")
-                return self._fallback_analysis(snapshot_path, page_number, document_id, "Quota exhausted - using original image")
-            else:
-                VisualBeautifier.quota_exhausted = False  # Reset after cooldown
-        
-        # Priority 1: Groq
-        if self.groq_client:
-            try:
-                return await self._analyze_with_groq(snapshot_path, page_number, document_id)
-            except Exception as e:
-                logger.error(f"Groq analysis failed for page {page_number}: {e}")
-                # Fall through to Gemini
-        
-        # Priority 2: Gemini
-        if self.gemini_client:
-            return await self._analyze_with_gemini(snapshot_path, page_number, document_id)
-            
-        return self._fallback_analysis(snapshot_path, page_number, document_id)
+        if os.path.isabs(path):
+            return f"/uploads/{document_id}/{Path(path).name}"
 
-    async def _analyze_with_groq(self, snapshot_path: str, page_number: int, document_id: str) -> PageAnalysis:
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                import base64
-                
-                # Encode image
-                with open(snapshot_path, "rb") as image_file:
-                    encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
-                
-                prompt = """Analyze this page and generate semantic HTML to recreate its content beautifully.
-EXTRACT EVERYTHING: text, headings, formulas, diagrams, tables, lists.
-OUTPUT ONLY HTML (no markdown, no code blocks). Just the content HTML."""
-
-                completion = await asyncio.to_thread(
-                    self.groq_client.chat.completions.create,
-                    model="llama-3.2-11b-vision-preview",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": prompt},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/png;base64,{encoded_string}"
-                                    }
-                                }
-                            ]
-                        }
-                    ],
-                    temperature=0.1,
-                    max_tokens=4096,
-                    top_p=1,
-                    stream=False,
-                    stop=None,
-                )
-                
-                html = completion.choices[0].message.content
-                if html.startswith("```"):
-                    lines = html.split("\n")
-                    html = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
-                html = html.replace("```html", "").replace("```", "").strip()
-                
-                return PageAnalysis(page_number=page_number, snapshot_path=snapshot_path, html_content=html, success=True)
-
-            except Exception as e:
-                logger.warning(f"Groq Page {page_number} attempt {attempt+1} failed: {e}")
-                if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(2)
-                    continue
-                
-                # If Groq fails completely, try Gemini as fallback
-                if self.gemini_client:
-                    logger.info(f"Groq failed for page {page_number}, falling back to Gemini...")
-                    return await self._analyze_with_gemini(snapshot_path, page_number, document_id)
-                    
-                return self._fallback_analysis(snapshot_path, page_number, document_id, str(e))
-
-    async def _analyze_with_gemini(self, snapshot_path: str, page_number: int, document_id: str) -> PageAnalysis:
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                import PIL.Image
-                await self._wait_for_rate_limit()
-                
-                img = PIL.Image.open(snapshot_path)
-                
-                prompt = """Analyze this page and generate semantic HTML to recreate its content beautifully.
-
-EXTRACT EVERYTHING: text, headings, formulas, diagrams, tables, lists.
-
-CRITICAL FORMATTING INSTRUCTIONS:
-- Use <h2> for main sections, <h3> for subsections.
-- Use <strong> for bold text (ensure key terms are bold).
-- Use <div class="equation-block">\\[LaTeX\\]</div> for display equations.
-- Use <span class="inline-math">\\(LaTeX\\)</span> for inline math.
-- Use <div class="definition"><div class="definition-term">Term</div><div class="definition-content">Def</div></div> for definitions.
-- Use <div class="callout note"><div class="callout-icon">💡</div><div class="callout-content"><div class="callout-title">Note</div>...</div></div> for important notes.
-- Use <div class="figure-container"><p><strong>Figure:</strong> Description</p></div> for images/diagrams.
-- Use <div class="key-points"><div class="key-points-title">Key Points</div><ul>...</ul></div> for summaries.
-- Use <div class="table-container"><table>...</table></div> for tables.
-
-OUTPUT ONLY HTML (no markdown, no code blocks). Just the content HTML."""
-
-                response = await asyncio.to_thread(
-                    self.gemini_client.generate_content, [prompt, img]
-                )
-                
-                if response and response.text:
-                    html = response.text.strip()
-                    if html.startswith("```"):
-                        lines = html.split("\n")
-                        html = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
-                    html = html.replace("```html", "").replace("```", "").strip()
-                    
-                    return PageAnalysis(page_number=page_number, snapshot_path=snapshot_path, html_content=html, success=True)
-                    
-            except Exception as e:
-                error_msg = str(e)
-                logger.warning(f"Page {page_number} attempt {attempt+1} failed: {error_msg}")
-                
-                if "429" in error_msg or "quota" in error_msg.lower():
-                    # Mark quota as exhausted to skip remaining pages
-                    VisualBeautifier.quota_exhausted = True
-                    VisualBeautifier.quota_exhausted_time = time.time()
-                    logger.warning("Quota exhausted - falling back to original images for remaining pages")
-                    return self._fallback_analysis(snapshot_path, page_number, document_id, "API quota limit reached")
-                
-                # For other errors, retry once then fallback
-                if attempt < self.MAX_RETRIES - 1:
-                    await asyncio.sleep(2)
-                    continue
-                
-                return self._fallback_analysis(snapshot_path, page_number, document_id, error_msg)
-        
-        return self._fallback_analysis(snapshot_path, page_number, document_id, "Max retries exceeded")
-    
-    def _fallback_analysis(self, snapshot_path: str, page_number: int, document_id: str, error: Optional[str] = None) -> PageAnalysis:
-        snapshot_url = f"/uploads/{document_id}/pages/page_{page_number:04d}.png"
-        html = f"""
-        <div class="callout note">
-            <div class="callout-icon">📄</div>
-            <div class="callout-content">
-                <div class="callout-title">Original Page</div>
-                <p>AI formatting unavailable. Showing original snapshot.</p>
-            </div>
-        </div>
-        <div class="figure-container">
-            <img src="{snapshot_url}" alt="Page {page_number}">
-            <div class="figure-caption"><strong>Page {page_number}</strong></div>
-        </div>
-        """
-        return PageAnalysis(page_number=page_number, snapshot_path=snapshot_path, html_content=html, success=False, error=error)
+        return path
     
     async def beautify_document_streaming(self, document_id: str, document_metadata: Dict[str, Any], document_filename: str) -> AsyncGenerator[str, None]:
         """Stream beautification results as Server-Sent Events"""
@@ -423,7 +430,7 @@ OUTPUT ONLY HTML (no markdown, no code blocks). Just the content HTML."""
             yield ": ping\n\n"
             
             if snapshot_path:
-                analysis = await self._analyze_page_with_vision(snapshot_path, page_num, document_id)
+                analysis = await self._analyze_page_with_vision(snapshot_path, page_num, document_id, document_metadata)
             else:
                 analysis = PageAnalysis(page_number=page_num, snapshot_path="", html_content=f'<div class="callout warning"><div class="callout-icon">⚠️</div><div class="callout-content">Page {page_num} not found</div></div>', success=False, error="Missing snapshot")
             
@@ -465,7 +472,7 @@ OUTPUT ONLY HTML (no markdown, no code blocks). Just the content HTML."""
                     snapshot_path = None
             
             if snapshot_path:
-                analysis = await self._analyze_page_with_vision(snapshot_path, page_num, document_id)
+                analysis = await self._analyze_page_with_vision(snapshot_path, page_num, document_id, document_metadata)
             else:
                 analysis = PageAnalysis(page_number=page_num, snapshot_path="", html_content=f'<div class="callout warning">Page {page_num} not found</div>', success=False)
             
@@ -546,3 +553,4 @@ OUTPUT ONLY HTML (no markdown, no code blocks). Just the content HTML."""
     </script>
 </body>
 </html>"""
+

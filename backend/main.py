@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 from app.config import settings
 from app.api.v1 import documents, equations, simulations, questions, summaries, sessions, notes_beautify_visual
+from app.database import init_db
 
 # Configure logging
 logging.basicConfig(
@@ -33,6 +34,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Lattice API...")
     logger.info(f"Environment: {settings.ENVIRONMENT}")
     logger.info(f"Database: {settings.DATABASE_URL}")
+    
+    # Initialize database
+    init_db()
     
     # Create upload directory if it doesn't exist
     import os

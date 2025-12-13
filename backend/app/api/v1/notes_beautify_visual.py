@@ -1,7 +1,7 @@
 """
 Visual Note Beautification API Endpoint
-Generates beautiful HTML/CSS output from page snapshots using Vision AI
-Supports streaming to show progress as pages complete
+Generates beautiful HTML/CSS output using OCR and formula extraction
+No LLM quota limits - perfect for MVP!
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -47,12 +47,15 @@ async def beautify_notes_visual(
     db: Session = Depends(get_db)
 ):
     """
-    Beautify notes using Visual AI analysis.
+    Beautify notes using OCR and formula extraction.
     
     This endpoint:
     1. Takes real page snapshots (PNG images)
-    2. Uses Gemini Vision to analyze ALL content (text, formulas, diagrams, images)
-    3. Generates beautiful HTML/CSS output like a pitch deck generator
+    2. Uses OCR (Tesseract) to extract all text with confidence scoring
+    3. Extracts and formats mathematical formulas with proper LaTeX rendering
+    4. Generates beautiful HTML/CSS output
+    
+    No LLM required - no quota limits!
     
     Returns URLs for previewing and downloading the beautified HTML document.
     """

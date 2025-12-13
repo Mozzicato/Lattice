@@ -1,6 +1,6 @@
 """
 OCR Engine for page-level text extraction.
-Uses Tesseract when available and returns confidence metadata.
+Uses EasyOCR for superior accuracy on academic documents and formulas.
 """
 from __future__ import annotations
 import logging
@@ -8,14 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PIL import Image
-
 try:
-    import pytesseract
-    from pytesseract import Output
+    import easyocr
+    EASYOCR_AVAILABLE = True
 except Exception:  # pragma: no cover - optional dependency
-    pytesseract = None
-    Output = None
+    easyocr = None
+    EASYOCR_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -38,21 +36,32 @@ class OcrResult:
 
 
 class OcrEngine:
-    """Lightweight OCR wrapper with graceful degradation."""
+    """EasyOCR-based text extraction with confidence scoring."""
 
     def __init__(self, low_confidence_threshold: int = 75):
         self.low_confidence_threshold = low_confidence_threshold
-        self.provider = "tesseract" if pytesseract else "unavailable"
+        self.provider = "easyocr" if EASYOCR_AVAILABLE else "unavailable"
+        self.reader = None
+        
+        if EASYOCR_AVAILABLE:
+            try:
+                # Initialize EasyOCR with English support (add more languages as needed)
+                self.reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+                logger.info("EasyOCR initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize EasyOCR: {e}")
+                self.reader = None
+                self.provider = "unavailable"
 
     def available(self) -> bool:
-        return pytesseract is not None
+        return self.reader is not None
 
     def extract_text(self, image_path: str) -> Optional[Dict[str, Any]]:
         """
-        Run OCR on an image. Returns None when OCR is unavailable or fails.
+        Run OCR on an image using EasyOCR. Returns None when OCR is unavailable or fails.
         """
         if not self.available():
-            logger.warning("OCR unavailable: pytesseract not installed")
+            logger.warning("OCR unavailable: EasyOCR not initialized")
             return None
 
         try:
@@ -61,43 +70,35 @@ class OcrEngine:
                 logger.warning("OCR skipped: %s does not exist", image_path)
                 return None
 
-            image = Image.open(path)
-            data = pytesseract.image_to_data(
-                image,
-                config="--oem 3 --psm 6",
-                output_type=Output.DICT,
-            )
+            # EasyOCR returns list of ([bbox], text, confidence)
+            results = self.reader.readtext(str(path))
 
             words: List[str] = []
             confidences: List[float] = []
             low_conf: List[Dict[str, Any]] = []
 
-            for i, word in enumerate(data.get("text", [])):
-                if not word or word.isspace():
+            for bbox, text, conf in results:
+                if not text or not text.strip():
                     continue
-                conf_raw = data.get("conf", [])[i]
-                try:
-                    conf_val = float(conf_raw)
-                except Exception:
-                    conf_val = -1
+                
+                # Convert confidence from 0-1 to 0-100
+                conf_val = conf * 100
+                
+                words.append(text)
+                confidences.append(conf_val)
+                
+                if conf_val < self.low_confidence_threshold:
+                    low_conf.append({
+                        "text": text,
+                        "confidence": round(conf_val, 2),
+                        "bbox": self._format_bbox(bbox),
+                    })
 
-                words.append(word)
-                if conf_val >= 0:
-                    confidences.append(conf_val)
-                    if conf_val < self.low_confidence_threshold:
-                        low_conf.append(
-                            {
-                                "text": word,
-                                "confidence": conf_val,
-                                "bbox": self._extract_bbox(data, i),
-                            }
-                        )
-
-            text = " ".join(words).strip()
+            text_output = " ".join(words).strip()
             avg_conf = sum(confidences) / len(confidences) if confidences else 0.0
 
             result = OcrResult(
-                text=text,
+                text=text_output,
                 average_confidence=round(avg_conf, 2),
                 provider=self.provider,
                 low_confidence_segments=low_conf,
@@ -107,10 +108,15 @@ class OcrEngine:
             logger.error("OCR failed for %s: %s", image_path, exc)
             return None
 
-    def _extract_bbox(self, data: Dict[str, List[Any]], index: int) -> Dict[str, Any]:
+    def _format_bbox(self, bbox: List[List[int]]) -> Dict[str, Any]:
+        """Convert EasyOCR bbox format to standardized format."""
+        # EasyOCR bbox is [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+        # Convert to {left, top, width, height}
+        xs = [point[0] for point in bbox]
+        ys = [point[1] for point in bbox]
         return {
-            "left": data.get("left", [None])[index],
-            "top": data.get("top", [None])[index],
-            "width": data.get("width", [None])[index],
-            "height": data.get("height", [None])[index],
+            "left": min(xs),
+            "top": min(ys),
+            "width": max(xs) - min(xs),
+            "height": max(ys) - min(ys),
         }

@@ -265,7 +265,9 @@ Feel free to ask me anything about this document!`
           } else if (data.type === 'complete') {
             eventSource.close();
             // Switch to the final server-generated URL which has the TOC and everything perfect
-            setVisualPreviewUrl(api.getVisualPreviewUrl(overview.document.id));
+            // Use full backend URL to ensure it works across different ports
+            const previewUrl = `${backendUrl}${api.getVisualPreviewUrl(overview.document.id)}`;
+            setVisualPreviewUrl(previewUrl);
             setBeautificationInfo({
               total_pages: data.total_pages,
               pages_processed: data.successful,

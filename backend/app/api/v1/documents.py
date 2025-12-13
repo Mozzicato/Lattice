@@ -28,54 +28,56 @@ async def upload_document(
     
     This endpoint:
     1. Validates and saves the uploaded file
-    2. Extracts ALL text content
-    3. Identifies ALL equations with context
-    4. Analyzes equations with AI (Gemini 2.5 Flash)
-    5. Extracts key concepts and document structure
-    6. Prepares document for interactive learning
+    2. Returns immediately with document ID
+    3. Processing happens in background (check status via poll_url)
     """
+    import asyncio
+    
     try:
-        # Initialize LLM client and processor
-        llm_client = LLMClient()
-        processor = DocumentProcessor(llm_client)
+        # Initialize processor for validation only
+        from app.services.document_parser import DocumentParser
+        parser = DocumentParser()
         
         # Validate file
-        validation = processor.parser.validate_file(file)
+        validation = parser.validate_file(file)
         if not validation["valid"]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=validation["error"]
             )
         
-        # Save file temporarily
+        # Save file asynchronously
         from app.config import settings
+        import aiofiles
+        
         upload_path = Path(settings.UPLOAD_DIR) / file.filename
         upload_path.parent.mkdir(parents=True, exist_ok=True)
         
-        with upload_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        async with aiofiles.open(upload_path, 'wb') as out_file:
+            while content := await file.read(1024 * 1024):  # Read in 1MB chunks
+                await out_file.write(content)
         
-        # Create document record
-        document = Document(filename=file.filename)
+        # Create document record with processing status
+        document = Document(
+            filename=file.filename,
+            doc_metadata={"status": "processing", "page_count": 0}
+        )
         db.add(document)
         db.commit()
         db.refresh(document)
         
-        logger.info(f"Document uploaded: {document.id}, starting comprehensive processing...")
+        logger.info(f"Document uploaded: {document.id}, starting background processing...")
         
-        # Process entire document comprehensively
-        results = processor.process_document(
-            file_path=str(upload_path),
-            document=document,
-            db=db
-        )
-        
-        logger.info(f"Document processing results: {results}")
+        # Start background processing
+        asyncio.create_task(_process_document_background(
+            document_id=document.id,
+            file_path=str(upload_path)
+        ))
         
         return UploadResponse(
             document_id=document.id,
-            status=results["status"],
-            estimated_time=0,
+            status="processing",
+            estimated_time=60,
             poll_url=f"/api/v1/documents/{document.id}"
         )
         
@@ -137,3 +139,43 @@ async def get_document_equations(document_id: str, db: Session = Depends(get_db)
         )
     
     return document.equations
+
+
+async def _process_document_background(document_id: str, file_path: str):
+    """Background task to process document without blocking upload response"""
+    from app.database import SessionLocal
+    
+    db = SessionLocal()
+    try:
+        logger.info(f"Background processing started for {document_id}")
+        
+        # Initialize processors
+        llm_client = LLMClient()
+        processor = DocumentProcessor(llm_client)
+        
+        # Get document
+        document = db.query(Document).filter(Document.id == document_id).first()
+        if not document:
+            logger.error(f"Document {document_id} not found for processing")
+            return
+        
+        # Process document
+        results = processor.process_document(
+            file_path=file_path,
+            document=document,
+            db=db
+        )
+        
+        logger.info(f"Background processing completed for {document_id}: {results}")
+        
+    except Exception as e:
+        logger.error(f"Background processing failed for {document_id}: {e}", exc_info=True)
+        
+        # Update document with error status
+        document = db.query(Document).filter(Document.id == document_id).first()
+        if document and document.doc_metadata:
+            document.doc_metadata["status"] = "failed"
+            document.doc_metadata["error"] = str(e)
+            db.commit()
+    finally:
+        db.close()
