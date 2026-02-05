@@ -38,6 +38,8 @@ class DocumentBase(BaseModel):
 class Page(BaseModel):
     id: int
     page_number: int
+    ocr_text: Optional[str] = None
+    latex_content: Optional[str] = None
     beautified_text: Optional[str] = None
 
     class Config:

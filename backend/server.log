@@ -1,0 +1,11 @@
+Serving frontend from C:\Users\SALAUDEEN MUBARAK\cloned\Lattice\frontend\build
+2026-02-04 09:24:12,761 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-02-04 09:24:12,762 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("documents")
+2026-02-04 09:24:12,762 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-04 09:24:12,766 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("pages")
+2026-02-04 09:24:12,766 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-04 09:24:12,768 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("sessions")
+2026-02-04 09:24:12,769 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-04 09:24:12,771 INFO sqlalchemy.engine.Engine PRAGMA main.table_info("messages")
+2026-02-04 09:24:12,771 INFO sqlalchemy.engine.Engine [raw sql] ()
+2026-02-04 09:24:12,774 INFO sqlalchemy.engine.Engine COMMIT

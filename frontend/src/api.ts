@@ -18,6 +18,8 @@ export interface Session {
 export interface Page {
   id: number;
   page_number: number;
+  ocr_text?: string | null;
+  latex_content?: string | null;
   beautified_text: string | null;
 }
 
@@ -38,7 +40,10 @@ export const api = {
       method: "POST",
       body: formData,
     });
-    if (!response.ok) throw new Error("Upload failed");
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+      throw new Error(errorData.detail || `Upload failed: ${response.status}`);
+    }
     return response.json();
   },
 
@@ -91,6 +96,24 @@ export const api = {
           method: "POST"
       });
       if (!response.ok) throw new Error("Failed to beautify document");
+      return response.json();
+  },
+
+  processDocument: async (documentId: number): Promise<any> => {
+      const response = await fetch(`${API_URL}/documents/${documentId}/process`, {
+          method: "POST"
+      });
+      if (!response.ok) throw new Error("Failed to process document");
+      return response.json();
+  },
+
+  updatePage: async (documentId: number, pageId: number, payload: any): Promise<any> => {
+      const response = await fetch(`${API_URL}/documents/${documentId}/pages/${pageId}/update`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error('Failed to update page');
       return response.json();
   }
 };

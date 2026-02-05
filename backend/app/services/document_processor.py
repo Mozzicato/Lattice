@@ -128,10 +128,66 @@ class DocumentProcessor:
                 len(v.get("low_confidence_segments", [])) for v in ocr_results.values()
             )
             
-            # Step 3: Extract ALL equations with context
-            logger.info("Step 3: Extracting all equations...")
+            # Step 3: Extract ALL equations with context from text
+            logger.info("Step 3: Extracting all equations from text...")
             extracted_equations = self.equation_extractor.extract_equations(raw_text)
             results["equations_found"] = len(extracted_equations)
+
+            image_equations = []
+            page_latex_map = {}
+
+            # Merge text-based and image-based equations, avoiding duplicates by LaTeX content
+            combined_equations = { (eq.latex, eq.position): eq for eq in extracted_equations }
+            for ieq in image_equations:
+                key = (ieq.latex, ieq.position)
+                if key not in combined_equations:
+                    combined_equations[key] = ieq
+
+            extracted_equations = list(combined_equations.values())
+            results["equations_found"] = len(extracted_equations)
+
+            # Step 3c: Persist page-level OCR and image-extracted LaTeX to Page rows
+            logger.info("Step 3c: Persisting page OCR and image-LaTeX into Page records...")
+            from app.models import Page as PageModel
+            for page in all_pages:
+                page_num = page.page_num
+                # Find existing page record
+                page_record = None
+                try:
+                    # Simple query to find page if exists
+                    page_record = db.query(PageModel).filter_by(document_id=document.id, page_number=page_num).first()
+                except Exception:
+                    # If using AsyncSession this may not work; we do a try/except to avoid hard dependency
+                    page_record = None
+
+                if not page_record:
+                    page_record = PageModel(document_id=document.id, page_number=page_num)
+
+                # Attach OCR text if present
+                if page_texts.get(page_num):
+                    page_record.ocr_text = page_texts.get(page_num)
+
+                # Attach image-extracted latex if present
+                if page_latex_map.get(page_num):
+                    # Join multiple latex blocks with two newlines
+                    page_record.latex_content = "\n\n".join(page_latex_map.get(page_num))
+
+                # Attach snapshot path or first image path if available
+                if page.snapshot_path:
+                    page_record.image_path = page.snapshot_path
+                elif page.images:
+                    page_record.image_path = page.images[0]['path']
+
+                try:
+                    db.add(page_record)
+                except Exception:
+                    pass
+
+            # Flush pages
+            try:
+                db.flush()
+            except Exception:
+                pass
             
             # Step 4: Save equations to database
             logger.info("Step 4: Saving equations to database...")
