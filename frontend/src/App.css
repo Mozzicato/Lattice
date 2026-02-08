@@ -855,10 +855,6 @@ body {
   font-size: 1rem;
 }
 
-.pdf-page-content {
-  /* Override KaTeX and text colors for white bg */
-}
-
 .pdf-page-content h1,
 .pdf-page-content h2,
 .pdf-page-content h3 {
@@ -946,7 +942,3 @@ body {
   font-family: 'Inter', sans-serif;
 }
 
-/* Horizontal rule between pages in styled mode */
-.pdf-page + .pdf-page {
-  /* gap handles spacing */
-}
