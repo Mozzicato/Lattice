@@ -14,11 +14,15 @@ function App() {
   const [loadingMessage, setLoadingMessage] = useState("");
   const [beautifiedContent, setBeautifiedContent] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const pdfContainerRef = useRef<HTMLDivElement>(null);
 
   // Edit modal state
   const [editingPage, setEditingPage] = useState<Page | null>(null);
   const [editLatex, setEditLatex] = useState("");
   const [editOcr, setEditOcr] = useState("");
+
+  // View mode: 'styled' (dark/current) or 'pdf' (white background like a real PDF)
+  const [viewMode, setViewMode] = useState<'styled' | 'pdf'>('styled');
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -112,43 +116,63 @@ function App() {
       const updatedDoc = await api.beautifyDocument(doc.id);
       setDoc(updatedDoc);
 
-      // Show combined text from all pages
-      const combined = updatedDoc.pages
-        ?.filter(p => p.beautified_text)
-        .sort((a, b) => a.page_number - b.page_number)
-        .map(p => p.beautified_text)
-        .join("\n\n---\n\n");
+      // Show combined text from all pages with page headers
+      const pages = updatedDoc.pages
+        ?.filter((p: any) => p.beautified_text)
+        .sort((a: any, b: any) => a.page_number - b.page_number);
 
-      if (combined) {
+      if (pages && pages.length > 0) {
+        const combined = pages
+          .map((p: any) => `## Page ${p.page_number}\n\n${p.beautified_text}`)
+          .join("\n\n---\n\n");
         setBeautifiedContent(combined);
         setLoadingMessage("");
         setIsLoading(false);
         return;
       }
 
-      // Otherwise poll the document endpoint until status is 'beautified'
-      setLoadingMessage("✨ Beautifying in background — waiting for results...");
+      // Poll job for real-time progress
+      const jobId = (updatedDoc as any).job_id;
+      if (!jobId) {
+        alert("No job ID returned");
+        setIsLoading(false);
+        return;
+      }
+
+      setLoadingMessage("📄 Processing pages...");
       const start = Date.now();
-      const timeoutMs = 120000; // 2 minutes
+      const timeoutMs = 300000; // 5 minutes
 
       while (Date.now() - start < timeoutMs) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const resp = await fetch(`/api/v1/documents/${doc.id}`);
-        if (!resp.ok) continue;
-        const polled = await resp.json();
-        setDoc(polled);
+        await new Promise((r) => setTimeout(r, 1500));
         
-        if (polled.status === 'beautified' || (polled.pages && polled.pages.length > 0 && polled.pages.every((p: any) => p.beautified_text))) {
-            const allText = polled.pages
-              ?.filter((p: any) => p.beautified_text)
-              .sort((a: any, b: any) => a.page_number - b.page_number)
-              .map((p: any) => p.beautified_text)
-              .join("\n\n---\n\n");
-            
-            setBeautifiedContent(allText);
+        // Poll job for progress message
+        const jobResp = await fetch(`/api/v1/documents/jobs/${jobId}`);
+        if (jobResp.ok) {
+          const jobData = await jobResp.json();
+          setLoadingMessage(`📄 ${jobData.message || "Processing..."}`);
+          
+          if (jobData.status === 'completed') {
+            // Job done, fetch document to get all beautified content
+            const docResp = await fetch(`/api/v1/documents/${doc.id}`);
+            if (docResp.ok) {
+              const finalDoc = await docResp.json();
+              setDoc(finalDoc);
+              
+              const allText = finalDoc.pages
+                ?.filter((p: any) => p.beautified_text)
+                .sort((a: any, b: any) => a.page_number - b.page_number)
+                .map((p: any) => `## Page ${p.page_number}\n\n${p.beautified_text}`)
+                .join("\n\n---\n\n");
+              
+              if (allText) {
+                setBeautifiedContent(allText);
+              }
+            }
             setLoadingMessage("");
             setIsLoading(false);
             return;
+          }
         }
       }
 
@@ -254,30 +278,97 @@ function App() {
   };
 
   const handleDownloadPDF = async () => {
-    if (!doc) return;
+    if (!beautifiedContent) return;
     
     setIsLoading(true);
-    setLoadingMessage("📥 Generating PDF...");
+    setLoadingMessage("📥 Preparing PDF pages...");
     
     try {
-      const response = await fetch(`/api/v1/documents/${doc.id}/download-pdf`);
-      
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || "Failed to generate PDF");
+      // We must be in PDF view so the white pages are rendered in the DOM
+      const prevMode = viewMode;
+      if (viewMode !== 'pdf') {
+        setViewMode('pdf');
+        // Wait for React to render the PDF pages
+        await new Promise(r => setTimeout(r, 800));
       }
-      
-      // Get the blob and download
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `beautified_${doc.filename || 'notes'}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      
+
+      // Wait one more tick for KaTeX to finish rendering
+      await new Promise(r => setTimeout(r, 300));
+
+      const container = pdfContainerRef.current;
+      if (!container) {
+        throw new Error("Could not find rendered pages. Try switching to PDF View manually first.");
+      }
+
+      const pages = container.querySelectorAll('.pdf-page') as NodeListOf<HTMLElement>;
+      if (pages.length === 0) {
+        throw new Error("No pages found to export");
+      }
+
+      setLoadingMessage(`📥 Capturing ${pages.length} page(s)...`);
+
+      // Use jsPDF directly so we can capture each page individually
+      const { default: jsPDF } = await import('jspdf');
+      const { default: html2canvas } = await import('html2canvas');
+
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'pt',
+        format: 'letter', // 612 x 792 pt
+      });
+
+      const pdfWidth = 612;
+      const pdfHeight = 792;
+
+      for (let i = 0; i < pages.length; i++) {
+        setLoadingMessage(`📥 Rendering page ${i + 1} of ${pages.length}...`);
+
+        const page = pages[i];
+
+        // Capture the visible DOM element directly (no off-screen cloning)
+        const canvas = await html2canvas(page, {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: '#ffffff',
+          logging: false,
+          // Ensure we capture the element as it looks on screen
+          scrollX: 0,
+          scrollY: 0,
+          windowWidth: page.scrollWidth,
+          windowHeight: page.scrollHeight,
+        });
+
+        const imgData = canvas.toDataURL('image/jpeg', 0.95);
+
+        // Calculate dimensions to fit the page proportionally
+        const canvasRatio = canvas.width / canvas.height;
+        const pageRatio = pdfWidth / pdfHeight;
+
+        let imgW = pdfWidth;
+        let imgH = pdfWidth / canvasRatio;
+
+        // If the image is taller than the page, scale down to fit height
+        if (imgH > pdfHeight) {
+          imgH = pdfHeight;
+          imgW = pdfHeight * canvasRatio;
+        }
+
+        if (i > 0) {
+          pdf.addPage();
+        }
+
+        // Center the image on the page
+        const xOffset = (pdfWidth - imgW) / 2;
+        const yOffset = 0;
+        pdf.addImage(imgData, 'JPEG', xOffset, yOffset, imgW, imgH);
+      }
+
+      pdf.save(`beautified_${doc?.filename || 'notes'}.pdf`);
+
+      // Restore view mode if we changed it
+      if (prevMode !== 'pdf') {
+        setViewMode(prevMode);
+      }
       setLoadingMessage("");
     } catch (error: any) {
       console.error(error);
@@ -337,15 +428,44 @@ function App() {
       {/* Beautified Notes Modal */}
       {beautifiedContent && (
         <div className="modal-overlay" onClick={() => setBeautifiedContent(null)}>
-          <div className="modal-content" onClick={e => e.stopPropagation()}>
+          <div className={`modal-content ${viewMode === 'pdf' ? 'modal-content-pdf' : ''}`} onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2>✨ Beautified Notes</h2>
+              <div className="view-toggle">
+                <button
+                  className={`toggle-btn ${viewMode === 'styled' ? 'active' : ''}`}
+                  onClick={() => setViewMode('styled')}
+                  title="Styled view"
+                >
+                  🎨 Styled
+                </button>
+                <button
+                  className={`toggle-btn ${viewMode === 'pdf' ? 'active' : ''}`}
+                  onClick={() => setViewMode('pdf')}
+                  title="PDF-like view"
+                >
+                  📄 PDF View
+                </button>
+              </div>
               <button className="close-btn-x" onClick={() => setBeautifiedContent(null)}>×</button>
             </div>
-            <div className="modal-body">
-              <div className="beautified-preview">
-                {renderLatexContent(beautifiedContent)}
-              </div>
+            <div className={`modal-body ${viewMode === 'pdf' ? 'modal-body-pdf' : ''}`}>
+              {viewMode === 'styled' ? (
+                <div className="beautified-preview">
+                  {renderLatexContent(beautifiedContent)}
+                </div>
+              ) : (
+                <div className="pdf-scroll-container" ref={pdfContainerRef}>
+                  {beautifiedContent.split('\n\n---\n\n').map((pageContent, idx) => (
+                    <div key={idx} className="pdf-page">
+                      <div className="pdf-page-content">
+                        {renderLatexContent(pageContent)}
+                      </div>
+                      <div className="pdf-page-number">Page {idx + 1}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="modal-footer">
               <button className="btn btn-secondary" onClick={() => setBeautifiedContent(null)}>Close</button>

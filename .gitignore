@@ -48,6 +48,18 @@ lerna-debug.log*
 frontend/build/
 frontend/dist/
 
+# Uploads & extracted images
+backend/uploads/
+backend/extracted_images/
+
+# Database
+*.db
+*.db-journal
+
+# Test scripts
+backend/test_vision_api.py
+
 # OS
 .DS_Store
+Thumbs.db
 Thumbs.db

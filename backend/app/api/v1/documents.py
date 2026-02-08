@@ -167,6 +167,26 @@ async def beautify_document(document_id: int, db: AsyncSession = Depends(get_db)
         raise HTTPException(status_code=500, detail=f"Beautification scheduling failed: {str(e)}")
 
 
+@router.get("/jobs/{job_id}")
+async def get_job_status(job_id: int, db: AsyncSession = Depends(get_db)):
+    """Get job status for real-time progress updates."""
+    from app.models import Job
+    query = select(Job).where(Job.id == job_id)
+    result = await db.execute(query)
+    job = result.scalar_one_or_none()
+    
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    return {
+        "id": job.id,
+        "status": job.status,
+        "progress": job.progress,
+        "message": job.message,
+        "document_id": job.document_id
+    }
+
+
 @router.post("/{document_id}/process")
 async def process_document(document_id: int, db: AsyncSession = Depends(get_db)):
     """Run OCR and equation extraction on a document."""

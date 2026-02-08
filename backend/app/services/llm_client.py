@@ -38,51 +38,60 @@ class LLMClient:
 
     async def get_completion(self, messages: List[Dict[str, Any]], temperature: float = 0.7) -> str:
         """
-        Get completion from OpenRouter, Groq, or Gemini with caching.
+        Get completion from OpenRouter (vision) or Groq (text-only).
         Messages: [{'role': 'user', 'content': '...', 'images': ['path/to/img']}]
         """
-        # Generate cache key from messages
-        import hashlib
-        cache_key = hashlib.md5(str(messages).encode()).hexdigest()
-        
-        if cache_key in LLMClient._cache:
-            logger.debug(f"Cache hit for prompt")
-            return LLMClient._cache[cache_key]
-        
-        result = None
-
         # Check for images
         has_images = any(msg.get('images') for msg in messages)
 
-        # For vision tasks, use OpenRouter with NVIDIA Nemotron (FREE, OCR-optimized!)
-        if has_images and self.openrouter_key:
+        # Vision tasks: ONLY use OpenRouter
+        if has_images:
+            if not self.openrouter_key:
+                return "Error: OpenRouter API key not configured"
             result = await self._openrouter_completion(messages, temperature)
-            if result:
-                if len(LLMClient._cache) >= LLMClient._cache_max:
-                    LLMClient._cache.pop(next(iter(LLMClient._cache)))
-                LLMClient._cache[cache_key] = result
-                return result
+            return result if result else "Error: OpenRouter Vision API call failed"
 
-        # For text-only, use Groq (fast)
-        if not has_images and self.groq_key:
+        # Text-only: try Groq first, then Gemini
+        if self.groq_key:
             result = await self._groq_text_completion(messages, temperature)
             if result:
-                if len(LLMClient._cache) >= LLMClient._cache_max:
-                    LLMClient._cache.pop(next(iter(LLMClient._cache)))
-                LLMClient._cache[cache_key] = result
                 return result
+            logger.warning("Groq failed, trying Gemini...")
 
-        # Fall back to Gemini
         if self.gemini_key:
             result = await self._gemini_completion(messages, temperature)
             if result:
-                if len(LLMClient._cache) >= LLMClient._cache_max:
-                    LLMClient._cache.pop(next(iter(LLMClient._cache)))
-                LLMClient._cache[cache_key] = result
+                return result
+            logger.warning("Gemini failed too")
+
+        logger.error("No LLM API key available or all calls failed")
+        return "Error: No LLM API configured"
+
+    async def text_completion(self, messages: List[Dict[str, Any]], temperature: float = 0.4) -> Optional[str]:
+        """
+        Text-only completion for cleanup/refinement passes.
+        Priority: Groq (fast) > Gemini (free) > OpenRouter text model
+        """
+        # Try Groq first (fastest)
+        if self.groq_key:
+            result = await self._groq_text_completion(messages, temperature)
+            if result:
                 return result
 
-        logger.error("No LLM API key available")
-        return "Error: No LLM API configured. Please set OPENROUTER_API_KEY for vision tasks."
+        # Try Gemini
+        if self.gemini_key:
+            result = await self._gemini_completion(messages, temperature)
+            if result:
+                return result
+
+        # Last resort: OpenRouter with a text model
+        if self.openrouter_key:
+            result = await self._openrouter_text_completion(messages, temperature)
+            if result:
+                return result
+
+        logger.error("text_completion: all providers failed")
+        return None
 
     async def _openrouter_completion(self, messages: List[Dict[str, Any]], temperature: float) -> Optional[str]:
         """Call OpenRouter API with NVIDIA Nemotron for vision/OCR tasks."""
@@ -143,7 +152,7 @@ class LLMClient:
                         "model": self.openrouter_vision_model,
                         "messages": formatted_messages,
                         "temperature": temperature,
-                        "max_tokens": 4096
+                        "max_tokens": 16384
                     }
                 )
             
@@ -162,7 +171,7 @@ class LLMClient:
         try:
             clean_messages = [{'role': m['role'], 'content': m['content']} for m in messages]
             
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     self.groq_url,
                     headers={
@@ -173,7 +182,7 @@ class LLMClient:
                         "model": self.groq_model,
                         "messages": clean_messages,
                         "temperature": temperature,
-                        "max_tokens": 4096
+                        "max_tokens": 8192
                     }
                 )
             if resp.status_code == 200:
@@ -184,6 +193,37 @@ class LLMClient:
                 return None
         except Exception as e:
             logger.warning(f"Groq API call failed: {e}")
+            return None
+
+    async def _openrouter_text_completion(self, messages: List[Dict[str, Any]], temperature: float) -> Optional[str]:
+        """Call OpenRouter with a free text model for cleanup tasks."""
+        try:
+            clean_messages = [{'role': m['role'], 'content': m['content']} for m in messages]
+
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                resp = await client.post(
+                    self.openrouter_url,
+                    headers={
+                        "Authorization": f"Bearer {self.openrouter_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://lattice-app.local",
+                        "X-Title": "Lattice Note Beautifier"
+                    },
+                    json={
+                        "model": "meta-llama/llama-3.3-70b-instruct:free",
+                        "messages": clean_messages,
+                        "temperature": temperature,
+                        "max_tokens": 16384
+                    }
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                return data["choices"][0]["message"]["content"]
+            else:
+                logger.warning(f"OpenRouter text API error {resp.status_code}: {resp.text}")
+                return None
+        except Exception as e:
+            logger.warning(f"OpenRouter text API call failed: {e}")
             return None
 
     async def _groq_completion(self, messages: List[Dict[str, Any]], temperature: float, has_images: bool = False) -> Optional[str]:

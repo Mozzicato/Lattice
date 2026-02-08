@@ -115,18 +115,66 @@ class PDFGenerator:
             
         return text
 
+    def _is_latex_line(self, line: str) -> bool:
+        """
+        Check if a line contains LaTeX math content.
+        Returns True if line contains backslashes and/or typical math patterns.
+        """
+        if '\\' not in line:
+            return False
+        
+        # Math indicators that suggest LaTeX content
+        math_patterns = [
+            '\\frac', '\\int', '\\sum', '\\prod', '\\partial', '\\nabla',
+            '\\boxed', '\\lim', '\\sin', '\\cos', '\\tan', '\\sqrt',
+            '\\begin{', '\\end{', '\\left', '\\right', '\\vec', '\\hat',
+            '\\alpha', '\\beta', '\\gamma', '\\delta', '\\epsilon', '\\theta',
+            '\\lambda', '\\mu', '\\nu', '\\pi', '\\sigma', '\\tau',
+            '\\Sigma', '\\Delta', '\\Gamma', '\\Lambda', '\\Phi', '\\Psi',
+            '\\log', '\\ln', '\\exp', '\\det', '\\cdot', '\\times', '\\div'
+        ]
+        
+        # If any pattern matches, it's likely LaTeX
+        for pattern in math_patterns:
+            if pattern in line:
+                return True
+        
+        # Generic backslash check for patterns like \partial^2 or \frac{...}
+        if re.search(r'\\\w+', line):  # Matches \word patterns
+            return True
+        
+        return False
+
     def _parse_markdown(self, text: str) -> List[Tuple[str, str]]:
         lines = text.split('\n')
         elements = []
         
         in_code_block = False
         in_math_block = False  # Explicit $$...$$ block
-        in_raw_latex_block = False # Implicit \begin{...} block
+        in_implicit_math_block = False  # Detected from LaTeX line content
         math_buffer = []
         
         for line in lines:
             stripped = line.strip()
             
+            if not stripped:
+                # Empty line: if we're buffering math, keep buffering (multi-line equation)
+                # Otherwise add spacer
+                if in_math_block or in_implicit_math_block:
+                    # Could be blank line within equation, skip it
+                    continue
+                else:
+                    elements.append(('spacer', '0.1'))
+                continue
+                
+            if stripped.startswith('```'):
+                in_code_block = not in_code_block
+                continue
+            
+            if in_code_block:
+                elements.append((self._scrub_text(stripped), 'code'))
+                continue
+
             # --- Handle Explicit $$ Math Blocks ---
             if stripped == '$$':
                 if in_math_block:
@@ -155,50 +203,31 @@ class PDFGenerator:
                     math_buffer.append(stripped)
                 continue
 
-            if not stripped:
-                elements.append(('spacer', '0.1'))
-                continue
-                
-            if stripped.startswith('```'):
-                in_code_block = not in_code_block
-                continue
-            
-            if in_code_block:
-                elements.append((self._scrub_text(stripped), 'code'))
-                continue
-
             # --- Handle Single Line Explicit Math ---
             if stripped.startswith('$$') and stripped.endswith('$$'):
                 elements.append((stripped, 'equation'))
                 continue
             
-            # --- Handle Implicit Multi-line LaTeX (e.g. \begin{cases} ... \end{cases}) ---
-            if stripped.startswith('\\begin{'):
-                 in_raw_latex_block = True
-                 math_buffer = [stripped]
-                 # If it closes on the same line (rare but possible)
-                 if '\\end{' in stripped:
-                     elements.append((f'$${stripped}$$', 'equation'))
-                     in_raw_latex_block = False
-                     math_buffer = []
-                 continue
+            # --- Handle Implicit Multi-line LaTeX (lines containing \\ patterns) ---
+            if self._is_latex_line(stripped):
+                if not in_implicit_math_block:
+                    # Starting a new implicit math block
+                    in_implicit_math_block = True
+                    math_buffer = [stripped]
+                else:
+                    # Continue buffering
+                    math_buffer.append(stripped)
+                continue
             
-            if in_raw_latex_block:
-                math_buffer.append(stripped)
-                if '\\end{' in stripped:
-                    full_math = '$$' + ' '.join(math_buffer) + '$$'
-                    elements.append((full_math, 'equation'))
-                    in_raw_latex_block = False
-                    math_buffer = []
-                continue
-
-            # --- Handle Single Line Raw LaTeX Indicators ---
-            latex_indicators = ['\\frac', '\\int', '\\sum', '\\partial', '\\nabla', '\\boxed', '\\lim']
-            # Only match if strictly starts with it or looks like math
-            if any(stripped.startswith(ind) for ind in latex_indicators) and not stripped.startswith('$'):
-                elements.append((f'$${stripped}$$', 'equation'))
-                continue
-
+            # Line doesn't contain LaTeX
+            if in_implicit_math_block:
+                # We were in a math block, so flush it now
+                full_math = '$$' + ' '.join(math_buffer) + '$$'
+                elements.append((full_math, 'equation'))
+                in_implicit_math_block = False
+                math_buffer = []
+                # Now process this non-math line normally (fall through)
+            
             # Detect Headers
             if stripped.startswith('# '):
                 elements.append((self._scrub_text(stripped[2:].strip()), 'title'))
@@ -216,6 +245,13 @@ class PDFGenerator:
                  elements.append((self._scrub_text(stripped[2:].strip()), 'blockquote'))
             else:
                 elements.append((self._scrub_text(stripped), 'body'))
+        
+        # Handle any unclosed implicit math block at end of document
+        if in_implicit_math_block and math_buffer:
+            full_math = '$$' + ' '.join(math_buffer) + '$$'
+            elements.append((full_math, 'equation'))
+            in_implicit_math_block = False
+            math_buffer = []
         
         return elements
 
