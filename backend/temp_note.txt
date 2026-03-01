@@ -1,5 +1,0 @@
-
-import html
-
-# In _process_inline_math > replace_math:
-# latex = html.unescape(match.group(1))
